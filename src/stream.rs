@@ -55,7 +55,7 @@ where
         &self.cid
     }
 
-    pub async fn read_to_eof(&mut self, buf: &mut Vec<u8>) -> io::Result<usize> {
+    pub async fn read_to_eof(&mut self, buf: &mut Vec<u8>, eof: usize) -> io::Result<usize> {
         // Reserve space in the buffer to avoid expensive allocation for small reads.
         buf.reserve(2048);
 
@@ -77,11 +77,18 @@ where
 
                         // Reserve additional space in the buffer proportional to the amount of
                         // data read.
+                        if eof == n {
+                            return Ok(n);
+                        }
                         buf.reserve(data.len());
                     }
-                    Err(err) => return Err(err),
+                    Err(err) => {
+                        return Err(err);
+                    }
                 },
-                Err(err) => return Err(io::Error::new(io::ErrorKind::Other, format!("{err:?}"))),
+                Err(err) => {
+                    return Err(io::Error::new(io::ErrorKind::Other, format!("{err:?}")));
+                }
             }
         }
     }
@@ -136,6 +143,9 @@ mod test {
         let receiver = UtpSocket::bind(receiver_addr).await.unwrap();
         let config = ConnectionConfig::default();
 
+        let data = vec![0xef; 10_00_000];
+        let eof = data.len();
+
         let rx = async move {
             // accept connection
             let mut rx_stream = receiver.accept(config).await.expect("Should accept stream");
@@ -143,7 +153,7 @@ mod test {
             // write.
             let mut data = vec![];
             rx_stream
-                .read_to_eof(&mut data)
+                .read_to_eof(&mut data, eof)
                 .await
                 .expect("Should read 100k bytes")
         };
@@ -155,7 +165,6 @@ mod test {
                 .await
                 .expect("Should open stream");
             // write 100k bytes data to the remote peer over the stream.
-            let data = vec![0xef; 100_000];
             tx_stream
                 .write(data.as_slice())
                 .await
@@ -190,11 +199,12 @@ mod test {
 
         // write 100k bytes data to the remote peer over the stream.
         let data = vec![0xef; 100_000];
+        let eof = data.len();
         let tx = tx_stream.write(data.as_slice());
 
         // read data from the remote peer until the peer indicates there is no data left to write.
         let mut data = vec![];
-        let rx = rx_stream.read_to_eof(&mut data);
+        let rx = rx_stream.read_to_eof(&mut data, eof);
 
         let (tx_res, rx_res) = tokio::join!(tx, rx);
 
